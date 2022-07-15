@@ -1,4 +1,4 @@
-// Parses brainfuck code into an itermediate representation following optimizations presented in http://calmerthanyouare.org/2015/01/07/optimizing-brainfuck.html
+// Parses brainfuck code into an itermediate representation following optimizations strategies presented in http://calmerthanyouare.org/2015/01/07/optimizing-brainfuck.html
 
 use std::collections::HashMap;
 
@@ -9,9 +9,13 @@ pub enum IR {
     Print { times: usize, offset: i32 },
     Read { offset: i32 },
     Exact { x: i32, offset: i32 },
-    // If a loop has over != 0 then before starting the while loop preform a Move { over }
     Loop { over: i32, instructions: Vec<IR> },
     Mul { x: i32, y: i32, offset: i32 }, // m[p+x] = m[p] * y
+}
+
+#[derive(Debug, PartialEq)]
+pub enum OptimizerError {
+    UnbalancedBrackets,
 }
 
 // Removes any Add { x: 0, offset: _ } or Move { over: 0 } instructions.
@@ -33,20 +37,8 @@ fn remove_zero_moves_and_adds(v: Vec<IR>) -> Vec<IR> {
         .collect()
 }
 
-// Returns the total number of instructions in the program
-// Loops are counted as the number of instructions in the loop body plus 1 for the loop instruction itself.
-fn total_length(v: &Vec<IR>) -> usize {
-    v.iter().fold(0, |acc, x| match x {
-        IR::Loop {
-            over: _,
-            instructions,
-        } => acc + total_length(instructions) + 1,
-        _ => acc + 1,
-    })
-}
-
 // Parses brainfuck code into an IR with _no_ optimizations.
-pub(crate) fn optimize_o0(bf: &str) -> Vec<IR> {
+pub(crate) fn optimize_o0(bf: &str) -> Result<Vec<IR>, OptimizerError> {
     let mut instructions_stack: Vec<Vec<IR>> = vec![vec![]];
 
     for c in bf.chars() {
@@ -90,10 +82,10 @@ pub(crate) fn optimize_o0(bf: &str) -> Vec<IR> {
     }
 
     if instructions_stack.len() != 1 {
-        panic!("Unbalanced brackets");
+        Err(OptimizerError::UnbalancedBrackets)
+    } else {
+        Ok(instructions_stack.pop().unwrap())
     }
-
-    instructions_stack.pop().unwrap()
 }
 
 // Parses brainfuck code into an IR with some optimizations.
@@ -107,7 +99,7 @@ pub(crate) fn optimize_o0(bf: &str) -> Vec<IR> {
 // - Clear before a Read destroys the Clear
 // - Optimizes [-] and [+] into Clear
 // - Adjacent loops are deleted. `[.-][.]` becomes `[.-]` because the second loop will never be executed.
-pub(crate) fn optimize_o1(bf: &str) -> Vec<IR> {
+pub(crate) fn optimize_o1(bf: &str) -> Result<Vec<IR>, OptimizerError> {
     // Helper function that takes as input a vec<IR>
     fn o1_optimize_vec(v: &Vec<IR>, program_start: bool) -> Vec<IR> {
         let mut result: Vec<IR> = if program_start {
@@ -203,10 +195,13 @@ pub(crate) fn optimize_o1(bf: &str) -> Vec<IR> {
     }
 
     // Start with O0 code
-    let instructions = optimize_o0(bf);
+    let instructions = optimize_o0(bf)?;
 
     // Fold adjacent instructions into a single instruction.
-    remove_zero_moves_and_adds(o1_optimize_vec(&instructions, true))
+    Ok(remove_zero_moves_and_adds(o1_optimize_vec(
+        &instructions,
+        true,
+    )))
 }
 
 // This type is used to merge nonadjacent Clear and Add instructions that update the same memory cell.
@@ -222,7 +217,7 @@ enum Behavior {
 //   similarily if we are within a loop that only consists of Add and Move instructions and all the Move instructions add to 0
 //   then we can remove the moves by adding offsets to the Add instructions.
 // - Non-adjacent Adds that change the same cell are merged
-pub(crate) fn optimize_o2(bf: &str) -> Vec<IR> {
+pub(crate) fn optimize_o2(bf: &str) -> Result<Vec<IR>, OptimizerError> {
     // Helper function that takes as input a vec<IR>
     fn o2_optimize_vec(v: &Vec<IR>) -> Vec<IR> {
         let mut result: Vec<IR> = vec![];
@@ -332,10 +327,10 @@ pub(crate) fn optimize_o2(bf: &str) -> Vec<IR> {
     }
 
     // Start with O1 optimize
-    let instructions = optimize_o1(bf);
+    let instructions = optimize_o1(bf)?;
 
     // Optimize the program
-    remove_zero_moves_and_adds(o2_optimize_vec(&instructions))
+    Ok(remove_zero_moves_and_adds(o2_optimize_vec(&instructions)))
 }
 
 // Merges move instructions into the offsets of future instructions until we hit a loop
@@ -402,7 +397,7 @@ fn merge_moves_into_offset(instructions: Vec<IR>) -> Vec<IR> {
 // Then the loop is removed and each Add { x, offset } instruction is replaced with a Mul { x: offset, y: x, offset: loop_offset } instruction.
 // The Exact instructions are kept as they are.
 // And an Exact { x: 0, offset: 0 } instruction is added at the end.
-pub(crate) fn optimize_o3(bf: &str) -> Vec<IR> {
+pub(crate) fn optimize_o3(bf: &str) -> Result<Vec<IR>, OptimizerError> {
     fn o3_optimize_vec(instruction: IR) -> Vec<IR> {
         if let IR::Loop { over, instructions } = instruction {
             // Verify that the loop is only Add and Exact instructions
@@ -455,8 +450,7 @@ pub(crate) fn optimize_o3(bf: &str) -> Vec<IR> {
     }
 
     // Start with O2 optimize
-    let instructions = optimize_o2(bf);
-    println!("{:?}", instructions);
+    let instructions = optimize_o2(bf)?;
 
     let mut result = vec![];
 
@@ -465,5 +459,5 @@ pub(crate) fn optimize_o3(bf: &str) -> Vec<IR> {
         .into_iter()
         .for_each(|i| result.extend(o3_optimize_vec(i)));
 
-    merge_moves_into_offset(result)
+    Ok(merge_moves_into_offset(result))
 }

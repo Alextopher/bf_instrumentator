@@ -4,20 +4,31 @@ use crate::parser::IR;
 
 type Cell = Wrapping<u8>;
 
+#[derive(Debug, PartialEq)]
+pub enum RunTimeError {
+    OutOfBounds,
+    OutOfInputs,
+    MaxIterationsExceeded,
+}
+
 // Implements an interpreter that makes use of the optimizations presented in http://calmerthanyouare.org/2015/01/07/optimizing-brainfuck.html
 // The interpreter is constructed with the BF program it is supposed to execute. Test cases are provided as an iterator of (input: Vec, output: Vec) tuples.
 pub struct Interpreter {
     program: Vec<IR>,
-    pub memory: Vec<Cell>,
-    pub pointer: i32,
+    memory: Vec<Cell>,
+    pointer: i32,
+    iterations: usize,
+    max_iterations: usize,
 }
 
 impl Interpreter {
-    pub fn from(program: Vec<IR>) -> Self {
+    pub fn from(program: Vec<IR>, max_iterations: usize) -> Self {
         Self {
             program,
             memory: vec![Wrapping(0); 65536],
             pointer: 0,
+            iterations: 0,
+            max_iterations,
         }
     }
 
@@ -33,25 +44,29 @@ impl Interpreter {
         self.memory[0..=last_non_zero_cell].to_vec()
     }
 
+    pub fn get_pointer(&self) -> i32 {
+        self.pointer
+    }
+
     pub fn reset(&mut self) {
         self.memory = vec![Wrapping(0); 65536];
         self.pointer = 0;
+        self.iterations = 0;
     }
 
     pub fn run_vec<'a, I>(
         &mut self,
         instructions: Vec<IR>,
         inputs: &mut I,
-        debug: bool,
-    ) -> Vec<Wrapping<u8>>
+    ) -> (Option<RunTimeError>, Vec<Wrapping<u8>>)
     where
         I: Iterator<Item = &'a Wrapping<u8>>,
     {
         let mut output = Vec::new();
         for instruction in instructions {
-            // print the instruction that is about to run
-            if debug {
-                println!("{:?}", instruction);
+            self.iterations += 1;
+            if self.iterations > self.max_iterations {
+                return (Some(RunTimeError::MaxIterationsExceeded), output);
             }
 
             match instruction {
@@ -72,7 +87,11 @@ impl Interpreter {
                     );
                 }
                 IR::Read { offset } => {
-                    self.memory[(self.pointer + offset) as usize] = *inputs.next().unwrap();
+                    if let Some(input) = inputs.next() {
+                        self.memory[(self.pointer + offset) as usize] = *input;
+                    } else {
+                        return (Some(RunTimeError::OutOfInputs), output);
+                    }
                 }
                 IR::Exact { x, offset } => {
                     self.memory[(self.pointer + offset) as usize] = Wrapping(x as u8);
@@ -83,7 +102,12 @@ impl Interpreter {
 
                     // then begin the loop
                     while self.memory[self.pointer as usize] != Wrapping(0) {
-                        output.extend(self.run_vec(instructions.clone(), inputs, debug));
+                        let (err, outputs) = self.run_vec(instructions.clone(), inputs);
+                        output.extend(outputs);
+
+                        if err.is_some() {
+                            return (err, output);
+                        }
                     }
                 }
                 IR::Mul { x, y, offset } => {
@@ -91,33 +115,11 @@ impl Interpreter {
                     self.memory[(self.pointer + offset + x) as usize] += Wrapping(add as u8);
                 }
             };
-
-            if debug {
-                // print the current state of the memory
-                println!(
-                    "{}",
-                    self.memory
-                        .iter()
-                        .map(|x| x.0)
-                        .fold(String::new(), |acc, x| {
-                            // each number is 3 characters wide
-                            acc + &format!("{:03} ", x)
-                        })
-                );
-                // print an "^" at the current pointer
-                print!(
-                    "{}",
-                    std::iter::repeat("    ")
-                        .take(self.pointer as usize)
-                        .collect::<String>()
-                );
-                println!("^");
-            }
         }
-        output
+        (None, output)
     }
 
-    pub fn run(&mut self, inputs: &Vec<Wrapping<u8>>, debug: bool) -> Vec<Wrapping<u8>> {
-        self.run_vec(self.program.clone(), &mut inputs.iter(), debug)
+    pub fn run(&mut self, inputs: &Vec<Wrapping<u8>>) -> (Option<RunTimeError>, Vec<Wrapping<u8>>) {
+        self.run_vec(self.program.clone(), &mut inputs.iter())
     }
 }
