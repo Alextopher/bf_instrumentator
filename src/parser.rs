@@ -9,8 +9,40 @@ pub enum IR {
     Print { times: usize, offset: i32 },
     Read { offset: i32 },
     Exact { x: i32, offset: i32 },
-    Loop { instructions: Vec<IR> },
+    // If a loop has over != 0 then before starting the while loop preform a Move { over }
+    Loop { over: i32, instructions: Vec<IR> },
     Mul { x: i32, y: i32, offset: i32 }, // m[p+x] = m[p] * y
+}
+
+// Removes any Add { x: 0, offset: _ } or Move { over: 0 } instructions.
+fn remove_zero_moves_and_adds(v: Vec<IR>) -> Vec<IR> {
+    v.into_iter()
+        .filter(|x| match x {
+            IR::Add { x, offset: _ } => *x != 0,
+            IR::Move { over } => *over != 0,
+            _ => true,
+        })
+        // recursively remove zero moves and fixes on loops
+        .map(|x| match x {
+            IR::Loop { over, instructions } => IR::Loop {
+                over,
+                instructions: remove_zero_moves_and_adds(instructions),
+            },
+            _ => x,
+        })
+        .collect()
+}
+
+// Returns the total number of instructions in the program
+// Loops are counted as the number of instructions in the loop body plus 1 for the loop instruction itself.
+fn total_length(v: &Vec<IR>) -> usize {
+    v.iter().fold(0, |acc, x| match x {
+        IR::Loop {
+            over: _,
+            instructions,
+        } => acc + total_length(instructions) + 1,
+        _ => acc + 1,
+    })
 }
 
 // Parses brainfuck code into an IR with _no_ optimizations.
@@ -49,6 +81,7 @@ pub(crate) fn optimize_o0(bf: &str) -> Vec<IR> {
             ']' => {
                 let loop_instructions = instructions_stack.pop().unwrap();
                 instructions_stack.last_mut().unwrap().push(IR::Loop {
+                    over: 0,
                     instructions: loop_instructions,
                 });
             }
@@ -116,18 +149,40 @@ pub(crate) fn optimize_o1(bf: &str) -> Vec<IR> {
                         *a += b;
                     }
                     // loops immediately following a loop are ignored
-                    (IR::Loop { instructions: _ }, IR::Loop { instructions: _ }) => {}
-                    (IR::Exact { x: 0, offset: 0 }, IR::Loop { instructions: _ }) => {}
+                    (
+                        IR::Loop {
+                            over: 0,
+                            instructions: _,
+                        },
+                        IR::Loop {
+                            over: 0,
+                            instructions: _,
+                        },
+                    ) => {}
+                    (
+                        IR::Exact { x: 0, offset: 0 },
+                        IR::Loop {
+                            over: 0,
+                            instructions: _,
+                        },
+                    ) => {}
                     // optimizes [-] and [+] into Clear or just recursively optimizes the loop
-                    (_, IR::Loop { instructions: i }) => {
-                        if i.len() == 1
-                            && (i[0] == IR::Add { x: 1, offset: 0 }
-                                || i[0] == IR::Add { x: -1, offset: 0 })
+                    (
+                        _,
+                        IR::Loop {
+                            over: 0,
+                            instructions,
+                        },
+                    ) => {
+                        if instructions.len() == 1
+                            && (instructions[0] == IR::Add { x: 1, offset: 0 }
+                                || instructions[0] == IR::Add { x: -1, offset: 0 })
                         {
                             result.push(IR::Exact { x: 0, offset: 0 });
                         } else {
                             result.push(IR::Loop {
-                                instructions: o1_optimize_vec(&i, false),
+                                over: 0,
+                                instructions: o1_optimize_vec(&instructions, false),
                             });
                         }
                     }
@@ -151,7 +206,7 @@ pub(crate) fn optimize_o1(bf: &str) -> Vec<IR> {
     let instructions = optimize_o0(bf);
 
     // Fold adjacent instructions into a single instruction.
-    o1_optimize_vec(&instructions, true)
+    remove_zero_moves_and_adds(o1_optimize_vec(&instructions, true))
 }
 
 // This type is used to merge nonadjacent Clear and Add instructions that update the same memory cell.
@@ -169,7 +224,7 @@ enum Behavior {
 // - Non-adjacent Adds that change the same cell are merged
 pub(crate) fn optimize_o2(bf: &str) -> Vec<IR> {
     // Helper function that takes as input a vec<IR>
-    fn o2_optimize_vec(v: &Vec<IR>, inLoop: bool) -> Vec<IR> {
+    fn o2_optimize_vec(v: &Vec<IR>) -> Vec<IR> {
         let mut result: Vec<IR> = vec![];
         // Tracks how the behavior of a cell changes over time.
         let mut behaviors: HashMap<i32, Behavior> = HashMap::new();
@@ -216,7 +271,10 @@ pub(crate) fn optimize_o2(bf: &str) -> Vec<IR> {
                         offset,
                     });
                 }
-                IR::Loop { instructions } => {
+                IR::Loop {
+                    over: 0,
+                    instructions,
+                } => {
                     // When we see a Loop instruction we need to
                     // 1. Consider if the behavior at this offset is Exact(0), if so we can remove the loop and consider as normal
                     // 2. Apply all of the behaviors that have been tracked so far
@@ -241,12 +299,10 @@ pub(crate) fn optimize_o2(bf: &str) -> Vec<IR> {
                     // drop the history
                     behaviors.clear();
 
-                    // move the offset
-                    result.push(IR::Move { over: offset });
-
                     // recursively optimize the loop
                     result.push(IR::Loop {
-                        instructions: o2_optimize_vec(&instructions, true),
+                        over: offset,
+                        instructions: o2_optimize_vec(&instructions),
                     });
 
                     // reset the offset counter and continue as normal
@@ -266,9 +322,10 @@ pub(crate) fn optimize_o2(bf: &str) -> Vec<IR> {
             });
         }
 
-        // If we are in a loop we need to add a Move instruction
-        if inLoop && offset != 0 {
-            result.push(IR::Move { over: offset });
+        // Technically a "correct" program we only need to run this within a loop.
+        // However, for my use case I don't like side effects and want my program to end at 0.
+        if offset != 0 {
+            result.push(IR::Move { over: offset })
         }
 
         result
@@ -278,5 +335,135 @@ pub(crate) fn optimize_o2(bf: &str) -> Vec<IR> {
     let instructions = optimize_o1(bf);
 
     // Optimize the program
-    o2_optimize_vec(&instructions, false)
+    remove_zero_moves_and_adds(o2_optimize_vec(&instructions))
+}
+
+// Merges move instructions into the offsets of future instructions until we hit a loop
+fn merge_moves_into_offset(instructions: Vec<IR>) -> Vec<IR> {
+    let mut result: Vec<IR> = vec![];
+    let mut new_offset = 0;
+
+    for i in instructions {
+        match i {
+            IR::Move { over } => {
+                new_offset += over;
+            }
+            IR::Add { x, offset } => {
+                result.push(IR::Add {
+                    x,
+                    offset: offset + new_offset,
+                });
+            }
+            IR::Print { times, offset } => {
+                result.push(IR::Print {
+                    times,
+                    offset: offset + new_offset,
+                });
+            }
+            IR::Read { offset } => {
+                result.push(IR::Read {
+                    offset: offset + new_offset,
+                });
+            }
+            IR::Exact { x, offset } => {
+                result.push(IR::Exact {
+                    x,
+                    offset: offset + new_offset,
+                });
+            }
+            IR::Mul { x, y, offset } => {
+                result.push(IR::Mul {
+                    x,
+                    y,
+                    offset: offset + new_offset,
+                });
+            }
+            IR::Loop { over, instructions } => {
+                result.push(IR::Loop {
+                    over: over + new_offset,
+                    instructions: merge_moves_into_offset(instructions),
+                });
+            }
+        }
+    }
+
+    if new_offset != 0 {
+        result.push(IR::Move { over: new_offset });
+    }
+
+    result
+}
+
+// O3 optimizations adds:
+// - If a loop has the follow structure:
+//   - Loop only has Add and Exact instructions
+//   - At offset 0 there is an Add { x: -1, offset: 0 } instruction
+//   - TODO: Support Add { x: 1, offset: 0 }
+// Then the loop is removed and each Add { x, offset } instruction is replaced with a Mul { x: offset, y: x, offset: loop_offset } instruction.
+// The Exact instructions are kept as they are.
+// And an Exact { x: 0, offset: 0 } instruction is added at the end.
+pub(crate) fn optimize_o3(bf: &str) -> Vec<IR> {
+    fn o3_optimize_vec(instruction: IR) -> Vec<IR> {
+        if let IR::Loop { over, instructions } = instruction {
+            // Verify that the loop is only Add and Exact instructions
+            let only_add_and_exact = instructions.iter().all(|i| match i {
+                IR::Add { x: _, offset: _ } => true,
+                IR::Exact { x: _, offset: _ } => true,
+                _ => false,
+            });
+
+            // Verify that there is the Add { x: -1, offset: 0 } instruction
+            let is_sub_one = instructions.iter().any(|i| match i {
+                IR::Add { x: -1, offset: 0 } => true,
+                _ => false,
+            });
+
+            if only_add_and_exact && is_sub_one {
+                let result = instructions
+                    .into_iter()
+                    .filter(|i| match i {
+                        IR::Add { x: -1, offset: 0 } => false,
+                        _ => true,
+                    })
+                    .map(|i| match i {
+                        IR::Add { x, offset } => IR::Mul {
+                            x: offset,
+                            y: x,
+                            offset: over,
+                        },
+                        _ => i,
+                    })
+                    .chain(std::iter::once(IR::Exact { x: 0, offset: over }))
+                    .chain(std::iter::once(IR::Move { over }))
+                    .collect();
+                result
+            } else {
+                let mut result = vec![];
+
+                instructions
+                    .into_iter()
+                    .for_each(|i| result.extend(o3_optimize_vec(i)));
+
+                vec![IR::Loop {
+                    over,
+                    instructions: result,
+                }]
+            }
+        } else {
+            vec![instruction]
+        }
+    }
+
+    // Start with O2 optimize
+    let instructions = optimize_o2(bf);
+    println!("{:?}", instructions);
+
+    let mut result = vec![];
+
+    // Optimize the program
+    instructions
+        .into_iter()
+        .for_each(|i| result.extend(o3_optimize_vec(i)));
+
+    merge_moves_into_offset(result)
 }
