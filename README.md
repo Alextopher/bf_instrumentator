@@ -1,4 +1,4 @@
-# bf_instrumentator
+# bf_instrumentor
 
 The goal of the project is to provide an interface to run, test, and profile BF code.
 
