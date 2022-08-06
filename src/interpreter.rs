@@ -1,10 +1,10 @@
-use std::num::Wrapping;
+use std::{cmp::Ordering, num::Wrapping};
 
 use crate::parser::IR;
 
 type Cell = Wrapping<u8>;
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RunTimeError {
     OutOfBounds,
     OutOfInputs,
@@ -74,10 +74,10 @@ impl Interpreter {
                     let cell = self.memory.get_mut((self.pointer + offset) as usize);
 
                     if let Some(cell) = cell {
-                        if x < 0 {
-                            *cell -= Wrapping(-x as u8);
-                        } else if x > 0 {
-                            *cell += Wrapping(x as u8);
+                        match x.cmp(&0) {
+                            Ordering::Less => *cell -= Wrapping(-x as u8),
+                            Ordering::Equal => {}
+                            Ordering::Greater => *cell += Wrapping(x as u8),
                         }
                     } else {
                         return (Some(RunTimeError::OutOfBounds), output);
@@ -167,8 +167,8 @@ impl Interpreter {
         (None, output)
     }
 
-    pub fn run(&mut self, inputs: &Vec<Wrapping<u8>>) -> (Option<RunTimeError>, Vec<Wrapping<u8>>) {
-        self.run_vec(self.program.clone(), &mut inputs.clone().into_iter())
+    pub fn run(&mut self, inputs: &[Wrapping<u8>]) -> (Option<RunTimeError>, Vec<Wrapping<u8>>) {
+        self.run_vec(self.program.clone(), &mut inputs.iter().copied())
     }
 
     pub fn run_iter(

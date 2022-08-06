@@ -1,16 +1,19 @@
 use std::num::Wrapping;
 
+use either::Either;
+use interpreter::{Interpreter, RunTimeError};
+
 mod interpreter;
 mod parser;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct TestFailure {
     typ: TestFailureType,
     input: Vec<Wrapping<u8>>,
     expected_output: Vec<Wrapping<u8>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TestFailureType {
     RunTimeError { err: interpreter::RunTimeError },
     NonZeroPointer { pointer: i32 },
@@ -26,7 +29,7 @@ pub enum OptimizationLevel {
     O3,
 }
 
-pub fn run<'a, I, O, F>(
+pub fn test<I, O, F>(
     bf: &str,
     inputs: I,
     outputs: O,
@@ -97,6 +100,34 @@ where
             errors
         }
         Err(_) => todo!(),
+    }
+}
+
+pub fn run(
+    bf: &str,
+    inputs: Vec<Wrapping<u8>>,
+    optimization_level: OptimizationLevel,
+    max_iterations: usize,
+) -> Result<Vec<Wrapping<u8>>, Either<RunTimeError, parser::OptimizerError>> {
+    let optimizer = match optimization_level {
+        OptimizationLevel::O0 => parser::optimize_o0,
+        OptimizationLevel::O1 => parser::optimize_o1,
+        OptimizationLevel::O2 => parser::optimize_o2,
+        OptimizationLevel::O3 => parser::optimize_o3,
+    };
+
+    match optimizer(bf) {
+        Ok(instructions) => {
+            let mut interpreter = Interpreter::from(instructions, max_iterations);
+            let (err, output) = interpreter.run(&inputs);
+
+            if let Some(err) = err {
+                Err(Either::Left(err))
+            } else {
+                Ok(output)
+            }
+        }
+        Err(e) => Err(Either::Right(e)),
     }
 }
 

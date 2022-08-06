@@ -30,7 +30,7 @@ impl From<char> for IR {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OptimizerError {
     UnbalancedBrackets,
 }
@@ -175,7 +175,7 @@ pub(crate) fn optimize_o1(bf: &str) -> Result<Vec<IR>, OptimizerError> {
                         } else {
                             result.push(IR::Loop {
                                 over: 0,
-                                instructions: o1_optimize_vec(&instructions, false),
+                                instructions: o1_optimize_vec(instructions, false),
                             });
                         }
                     }
@@ -187,7 +187,7 @@ pub(crate) fn optimize_o1(bf: &str) -> Result<Vec<IR>, OptimizerError> {
         }
 
         // remove the initial Clear instruction
-        if program_start && result.len() > 0 && result[0] == (IR::Exact { x: 0, offset: 0 }) {
+        if program_start && !result.is_empty() && result[0] == (IR::Exact { x: 0, offset: 0 }) {
             return result.into_iter().skip(1).collect();
         }
 
@@ -226,9 +226,7 @@ pub(crate) fn optimize_o2(bf: &str) -> Result<Vec<IR>, OptimizerError> {
         let mut behaviors: HashMap<i32, Behavior> = HashMap::new();
         let mut offset = 0;
 
-        let mut iter = v.iter();
-
-        while let Some(i) = iter.next() {
+        for i in v {
             match i {
                 IR::Move { over } => {
                     offset += *over;
@@ -298,7 +296,7 @@ pub(crate) fn optimize_o2(bf: &str) -> Result<Vec<IR>, OptimizerError> {
                     // recursively optimize the loop
                     result.push(IR::Loop {
                         over: offset,
-                        instructions: o2_optimize_vec(&instructions),
+                        instructions: o2_optimize_vec(instructions),
                     });
 
                     // reset the offset counter and continue as normal
@@ -402,25 +400,22 @@ pub(crate) fn optimize_o3(bf: &str) -> Result<Vec<IR>, OptimizerError> {
     fn o3_optimize_vec(instruction: IR) -> Vec<IR> {
         if let IR::Loop { over, instructions } = instruction {
             // Verify that the loop is only Add and Exact instructions
-            let only_add_and_exact = instructions.iter().all(|i| match i {
-                IR::Add { x: _, offset: _ } => true,
-                IR::Exact { x: _, offset: _ } => true,
-                _ => false,
+            let only_add_and_exact = instructions.iter().all(|i| {
+                matches!(
+                    i,
+                    IR::Add { x: _, offset: _ } | IR::Exact { x: _, offset: _ }
+                )
             });
 
             // Verify that there is the Add { x: -1, offset: 0 } instruction
-            let is_sub_one = instructions.iter().any(|i| match i {
-                IR::Add { x: -1, offset: 0 } => true,
-                _ => false,
-            });
+            let is_sub_one = instructions
+                .iter()
+                .any(|i| matches!(i, IR::Add { x: -1, offset: 0 }));
 
             if only_add_and_exact && is_sub_one {
-                let result = instructions
+                instructions
                     .into_iter()
-                    .filter(|i| match i {
-                        IR::Add { x: -1, offset: 0 } => false,
-                        _ => true,
-                    })
+                    .filter(|i| !matches!(i, IR::Add { x: -1, offset: 0 }))
                     .map(|i| match i {
                         IR::Add { x, offset } => IR::Mul {
                             x: offset,
@@ -431,8 +426,7 @@ pub(crate) fn optimize_o3(bf: &str) -> Result<Vec<IR>, OptimizerError> {
                     })
                     .chain(std::iter::once(IR::Exact { x: 0, offset: over }))
                     .chain(std::iter::once(IR::Move { over }))
-                    .collect();
-                result
+                    .collect()
             } else {
                 let mut result = vec![];
 
