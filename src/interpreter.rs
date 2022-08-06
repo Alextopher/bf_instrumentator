@@ -4,7 +4,7 @@ use crate::parser::IR;
 
 type Cell = Wrapping<u8>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum RunTimeError {
     OutOfBounds,
     OutOfInputs,
@@ -54,13 +54,13 @@ impl Interpreter {
         self.iterations = 0;
     }
 
-    pub fn run_vec<'a, I>(
+    pub fn run_vec<I>(
         &mut self,
         instructions: Vec<IR>,
         inputs: &mut I,
     ) -> (Option<RunTimeError>, Vec<Wrapping<u8>>)
     where
-        I: Iterator<Item = &'a Wrapping<u8>>,
+        I: Iterator<Item = Wrapping<u8>>,
     {
         let mut output = Vec::new();
         for instruction in instructions {
@@ -71,37 +71,72 @@ impl Interpreter {
 
             match instruction {
                 IR::Add { x, offset } => {
-                    if x < 0 {
-                        self.memory[(self.pointer + offset) as usize] -= Wrapping(-x as u8);
-                    } else if x > 0 {
-                        self.memory[(self.pointer + offset) as usize] += Wrapping(x as u8);
+                    let cell = self.memory.get_mut((self.pointer + offset) as usize);
+
+                    if let Some(cell) = cell {
+                        if x < 0 {
+                            *cell -= Wrapping(-x as u8);
+                        } else if x > 0 {
+                            *cell += Wrapping(x as u8);
+                        }
+                    } else {
+                        return (Some(RunTimeError::OutOfBounds), output);
                     }
                 }
                 IR::Move { over } => {
                     self.pointer += over;
                 }
                 IR::Print { times, offset } => {
-                    output.extend(
-                        std::iter::repeat(self.memory[(self.pointer + offset) as usize])
-                            .take(times),
-                    );
+                    let cell = self.memory.get((self.pointer + offset) as usize);
+
+                    if let Some(cell) = cell {
+                        output.extend(std::iter::repeat(cell).take(times));
+                    } else {
+                        return (Some(RunTimeError::OutOfBounds), output);
+                    }
                 }
                 IR::Read { offset } => {
-                    if let Some(input) = inputs.next() {
-                        self.memory[(self.pointer + offset) as usize] = *input;
+                    let cell = self.memory.get_mut((self.pointer + offset) as usize);
+
+                    if let Some(cell) = cell {
+                        if let Some(input) = inputs.next() {
+                            *cell = input;
+                        } else {
+                            return (Some(RunTimeError::OutOfInputs), output);
+                        }
                     } else {
-                        return (Some(RunTimeError::OutOfInputs), output);
+                        return (Some(RunTimeError::OutOfBounds), output);
                     }
                 }
                 IR::Exact { x, offset } => {
-                    self.memory[(self.pointer + offset) as usize] = Wrapping(x as u8);
+                    let cell = self.memory.get_mut((self.pointer + offset) as usize);
+
+                    if let Some(cell) = cell {
+                        *cell = Wrapping(x as u8)
+                    } else {
+                        return (Some(RunTimeError::OutOfBounds), output);
+                    }
                 }
                 IR::Loop { over, instructions } => {
                     // preform a move
                     self.pointer += over;
 
                     // then begin the loop
-                    while self.memory[self.pointer as usize] != Wrapping(0) {
+                    loop {
+                        self.iterations += 1;
+                        if self.iterations > self.max_iterations {
+                            return (Some(RunTimeError::MaxIterationsExceeded), output);
+                        }
+
+                        let cell = self.memory.get(self.pointer as usize);
+                        if let Some(cell) = cell {
+                            if *cell == Wrapping(0) {
+                                break;
+                            }
+                        } else {
+                            return (Some(RunTimeError::OutOfBounds), output);
+                        }
+
                         let (err, outputs) = self.run_vec(instructions.clone(), inputs);
                         output.extend(outputs);
 
@@ -111,8 +146,21 @@ impl Interpreter {
                     }
                 }
                 IR::Mul { x, y, offset } => {
-                    let add = self.memory[(self.pointer + offset) as usize].0 as i32 * y;
-                    self.memory[(self.pointer + offset + x) as usize] += Wrapping(add as u8);
+                    let add = {
+                        let cell = self.memory.get_mut((self.pointer + offset) as usize);
+                        if let Some(cell) = cell {
+                            cell.0 as i32 * y
+                        } else {
+                            return (Some(RunTimeError::OutOfBounds), output);
+                        }
+                    };
+
+                    let cell = self.memory.get_mut((self.pointer + offset + x) as usize);
+                    if let Some(cell) = cell {
+                        *cell += Wrapping(add as u8);
+                    } else {
+                        return (Some(RunTimeError::OutOfBounds), output);
+                    }
                 }
             };
         }
@@ -120,6 +168,13 @@ impl Interpreter {
     }
 
     pub fn run(&mut self, inputs: &Vec<Wrapping<u8>>) -> (Option<RunTimeError>, Vec<Wrapping<u8>>) {
-        self.run_vec(self.program.clone(), &mut inputs.iter())
+        self.run_vec(self.program.clone(), &mut inputs.clone().into_iter())
+    }
+
+    pub fn run_iter(
+        &mut self,
+        mut inputs: impl Iterator<Item = Wrapping<u8>>,
+    ) -> (Option<RunTimeError>, Vec<Wrapping<u8>>) {
+        self.run_vec(self.program.clone(), &mut inputs)
     }
 }

@@ -13,6 +13,23 @@ pub enum IR {
     Mul { x: i32, y: i32, offset: i32 }, // m[p+x] = m[p] * y
 }
 
+impl From<char> for IR {
+    fn from(c: char) -> Self {
+        match c {
+            '+' => IR::Add { x: 1, offset: 0 },
+            '-' => IR::Add { x: -1, offset: 0 },
+            '>' => IR::Move { over: 1 },
+            '<' => IR::Move { over: -1 },
+            '.' => IR::Print {
+                times: 1,
+                offset: 0,
+            },
+            ',' => IR::Read { offset: 0 },
+            _ => panic!("Unrecognized character: {}", c),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum OptimizerError {
     UnbalancedBrackets,
@@ -42,49 +59,33 @@ pub(crate) fn optimize_o0(bf: &str) -> Result<Vec<IR>, OptimizerError> {
     let mut instructions_stack: Vec<Vec<IR>> = vec![vec![]];
 
     for c in bf.chars() {
-        match c {
-            '+' => instructions_stack
+        if c == '[' {
+            instructions_stack.push(vec![]);
+        } else if c == ']' {
+            let loop_instructions = instructions_stack
+                .pop()
+                .ok_or(OptimizerError::UnbalancedBrackets)?;
+
+            instructions_stack
                 .last_mut()
-                .unwrap()
-                .push(IR::Add { x: 1, offset: 0 }),
-            '-' => instructions_stack
-                .last_mut()
-                .unwrap()
-                .push(IR::Add { x: -1, offset: 0 }),
-            '>' => instructions_stack
-                .last_mut()
-                .unwrap()
-                .push(IR::Move { over: 1 }),
-            '<' => instructions_stack
-                .last_mut()
-                .unwrap()
-                .push(IR::Move { over: -1 }),
-            '.' => instructions_stack.last_mut().unwrap().push(IR::Print {
-                times: 1,
-                offset: 0,
-            }),
-            ',' => instructions_stack
-                .last_mut()
-                .unwrap()
-                .push(IR::Read { offset: 0 }),
-            '[' => {
-                instructions_stack.push(vec![]);
-            }
-            ']' => {
-                let loop_instructions = instructions_stack.pop().unwrap();
-                instructions_stack.last_mut().unwrap().push(IR::Loop {
+                .ok_or(OptimizerError::UnbalancedBrackets)?
+                .push(IR::Loop {
                     over: 0,
                     instructions: loop_instructions,
                 });
-            }
-            _ => {}
+        } else {
+            instructions_stack
+                .last_mut()
+                .ok_or(OptimizerError::UnbalancedBrackets)?
+                .push(c.into());
         }
     }
 
-    if instructions_stack.len() != 1 {
-        Err(OptimizerError::UnbalancedBrackets)
+    if let Some(mut last_instructions) = instructions_stack.pop() {
+        last_instructions = remove_zero_moves_and_adds(last_instructions);
+        Ok(last_instructions)
     } else {
-        Ok(instructions_stack.pop().unwrap())
+        Err(OptimizerError::UnbalancedBrackets)
     }
 }
 
@@ -185,8 +186,8 @@ pub(crate) fn optimize_o1(bf: &str) -> Result<Vec<IR>, OptimizerError> {
             }
         }
 
-        if program_start {
-            // remove the initial Clear instruction
+        // remove the initial Clear instruction
+        if program_start && result.len() > 0 && result[0] == (IR::Exact { x: 0, offset: 0 }) {
             return result.into_iter().skip(1).collect();
         }
 

@@ -19,18 +19,31 @@ pub enum TestFailureType {
     OptimizerError(parser::OptimizerError),
 }
 
-fn run<'a, I, O, F>(
+pub enum OptimizationLevel {
+    O0,
+    O1,
+    O2,
+    O3,
+}
+
+pub fn run<'a, I, O, F>(
     bf: &str,
     inputs: I,
     outputs: O,
-    optimizer: F,
+    optimization_level: OptimizationLevel,
     max_iterations: usize,
 ) -> Vec<TestFailure>
 where
     I: IntoIterator<Item = Vec<Wrapping<u8>>>,
     O: IntoIterator<Item = Vec<Wrapping<u8>>>,
-    F: FnOnce(&str) -> Result<Vec<parser::IR>, parser::OptimizerError>,
 {
+    let optimizer = match optimization_level {
+        OptimizationLevel::O0 => parser::optimize_o0,
+        OptimizationLevel::O1 => parser::optimize_o1,
+        OptimizationLevel::O2 => parser::optimize_o2,
+        OptimizationLevel::O3 => parser::optimize_o3,
+    };
+
     match optimizer(bf) {
         Ok(instructions) => {
             let mut interpreter =
@@ -85,82 +98,6 @@ where
         }
         Err(_) => todo!(),
     }
-}
-
-pub fn run_bf_o3<'a, I, O>(
-    bf: &str,
-    inputs: I,
-    outputs: O,
-    max_iterations: usize,
-) -> Vec<TestFailure>
-where
-    I: IntoIterator<Item = Vec<Wrapping<u8>>>,
-    O: IntoIterator<Item = Vec<Wrapping<u8>>>,
-{
-    run(
-        bf,
-        inputs,
-        outputs,
-        crate::parser::optimize_o3,
-        max_iterations,
-    )
-}
-
-pub fn run_bf_o2<'a, I, O>(
-    bf: &str,
-    inputs: I,
-    outputs: O,
-    max_iterations: usize,
-) -> Vec<TestFailure>
-where
-    I: IntoIterator<Item = Vec<Wrapping<u8>>>,
-    O: IntoIterator<Item = Vec<Wrapping<u8>>>,
-{
-    run(
-        bf,
-        inputs,
-        outputs,
-        crate::parser::optimize_o2,
-        max_iterations,
-    )
-}
-
-pub fn run_bf_o1<'a, I, O>(
-    bf: &str,
-    inputs: I,
-    outputs: O,
-    max_iterations: usize,
-) -> Vec<TestFailure>
-where
-    I: IntoIterator<Item = Vec<Wrapping<u8>>>,
-    O: IntoIterator<Item = Vec<Wrapping<u8>>>,
-{
-    run(
-        bf,
-        inputs,
-        outputs,
-        crate::parser::optimize_o1,
-        max_iterations,
-    )
-}
-
-pub fn run_bf_o0<'a, I, O>(
-    bf: &str,
-    inputs: I,
-    outputs: O,
-    max_iterations: usize,
-) -> Vec<TestFailure>
-where
-    I: IntoIterator<Item = Vec<Wrapping<u8>>>,
-    O: IntoIterator<Item = Vec<Wrapping<u8>>>,
-{
-    run(
-        bf,
-        inputs,
-        outputs,
-        crate::parser::optimize_o0,
-        max_iterations,
-    )
 }
 
 #[cfg(test)]
