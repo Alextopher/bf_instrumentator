@@ -105,7 +105,7 @@ where
 
 pub fn run(
     bf: &str,
-    inputs: Vec<Wrapping<u8>>,
+    input: &[Wrapping<u8>],
     optimization_level: OptimizationLevel,
     max_iterations: usize,
 ) -> Result<Vec<Wrapping<u8>>, Either<RunTimeError, parser::OptimizerError>> {
@@ -119,7 +119,7 @@ pub fn run(
     match optimizer(bf) {
         Ok(instructions) => {
             let mut interpreter = Interpreter::from(instructions, max_iterations);
-            let (err, output) = interpreter.run(&inputs);
+            let (err, output) = interpreter.run(input);
 
             if let Some(err) = err {
                 Err(Either::Left(err))
