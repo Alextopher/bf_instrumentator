@@ -29,7 +29,7 @@ pub enum OptimizationLevel {
     O3,
 }
 
-pub fn test<I, O, F>(
+pub fn test<I, O>(
     bf: &str,
     inputs: I,
     outputs: O,
